@@ -43,7 +43,7 @@ appstore_token: ${{ secrets.NEXTCLOUD_APPSTORE_TOKEN }}
 Here's a complete workflow example:
 
 ```yaml
-	name: Release Nextcloud App
+name: Release Nextcloud App
 on:
 push:
 branches:
