@@ -1,0 +1,197 @@
+name: 'Nextcloud App Release Action'
+description: 'Automates the release process for Nextcloud apps'
+inputs:
+  github_token:
+    description: 'GitHub token for creating releases and pushing changes'
+    required: true
+  signing_cert:
+    description: 'Nextcloud signing certificate'
+    required: true
+  signing_key:
+    description: 'Nextcloud signing key'
+    required: true
+  appstore_token:
+    description: 'Nextcloud App Store token'
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Set app env
+      shell: bash
+      run: |
+        echo "APP_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+    - name: Get current version and increment
+      id: increment_version
+      shell: bash
+      run: |
+        current_version=$(grep -oP '(?<=<version>)[^<]+' appinfo/info.xml)
+        IFS='.' read -ra version_parts <<< "$current_version"
+        ((version_parts[2]++))
+        new_version="${version_parts[0]}.${version_parts[1]}.${version_parts[2]}"
+        echo "NEW_VERSION=$new_version" >> $GITHUB_ENV
+        echo "new_version=$new_version" >> $GITHUB_OUTPUT
+
+    - name: Update version in info.xml
+      shell: bash
+      run: |
+        sed -i "s|<version>.*</version>|<version>${{ env.NEW_VERSION }}</version>|" appinfo/info.xml
+
+    - name: Commit version update
+      shell: bash
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git commit -am "Bump version to ${{ env.NEW_VERSION }}"
+        git push
+
+    - name: Prepare Signing Certificate and Key
+      shell: bash
+      run: |
+        echo "${{ inputs.signing_cert }}" > signing-cert.crt
+        echo "${{ inputs.signing_key }}" > signing-key.key
+
+    - name: Install npm dependencies
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18.x'
+
+    - name: Set up PHP and install extensions
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.2'
+        extensions: zip, gd
+
+    - name: Install npm dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Build npm
+      shell: bash
+      run: npm run build
+
+    - name: Install composer dependencies
+      shell: bash
+      run: composer i --no-dev
+
+    - name: Create package directory
+      shell: bash
+      run: |
+        mkdir -p package/${{ env.APP_NAME }}
+        rsync -av --progress \
+          --exclude='package' \
+          --exclude='.git' \
+          --exclude='.github' \
+          --exclude='.vscode' \
+          --exclude='docker' \
+          --exclude='docs' \
+          --exclude='node_modules' \
+          --exclude='/src' \
+          --exclude='test' \
+          --exclude='package-lock.json' \
+          --exclude='composer.lock' \
+          --exclude='composer-setup.php' \
+          --exclude='.phpunit.result.cache' \
+          --exclude='phpmd.xml' \
+          --exclude='signing-key.key' \
+          --exclude='package.json' \
+          --exclude='composer.json' \
+          --exclude='coverage.txt' \
+          --exclude='signing-cert.crt' \
+          --exclude='docker-compose.yml' \
+          --exclude='webpack.config.js' \
+          --exclude='.prettierrc' \
+          --exclude='psalm.xml' \
+          --exclude='phpunit.xml' \
+          --exclude='tsconfig.json' \
+          --exclude='changelog-ci-config.json' \
+          --exclude='jest.config.js' \
+          --exclude='.gitattributes' \
+          --exclude='.php-cs-fixer.dist.php' \
+          --exclude='.gitignore' \
+          --exclude='.eslintrc.js' \
+          --exclude='stylelint.config.js' \
+          --exclude='.babelrc' \
+          --exclude='.nvmrc' \
+          ./ package/${{ env.APP_NAME }}/
+
+    - name: Create Tarball
+      shell: bash
+      run: |
+        cd package && tar -czf ../nextcloud-release.tar.gz ${{ env.APP_NAME }}
+
+    - name: Sign the TAR.GZ file with OpenSSL
+      shell: bash
+      run: |
+        openssl dgst -sha512 -sign signing-key.key nextcloud-release.tar.gz | openssl base64 -out nextcloud-release.signature
+
+    - name: Generate Git version information
+      uses: codacy/git-version@2.7.1
+      with:
+        release-branch: main
+
+    - name: Extract repository description
+      id: repo-description
+      shell: bash
+      run: |
+        description=$(jq -r '.description' <(curl -s https://api.github.com/repos/${{ github.repository }}))
+        echo "REPO_DESCRIPTION=$description" >> $GITHUB_ENV
+
+    - name: Run Changelog CI
+      if: github.ref == 'refs/heads/main'
+      uses: saadmk11/changelog-ci@v1.1.2
+      with:
+        release_version: ${{ env.NEW_VERSION }}
+        config_file: changelog-ci-config.json
+
+    - name: Use the version
+      shell: bash
+      run: |
+        echo ${{ steps.version.outputs.version }}
+
+    - name: Copy the package files into the package
+      shell: bash
+      run: |
+        mkdir -p package/${{ env.APP_NAME }}
+        rsync -av --progress --exclude='package' --exclude='.git' ./ package/${{ env.APP_NAME }}/
+
+    - name: Create GitHub Release
+      uses: ncipollo/release-action@v1.12.0
+      with:
+        token: ${{ inputs.github_token }}
+        tag: v${{ env.NEW_VERSION }}
+        name: Release ${{ env.NEW_VERSION }}
+        draft: false
+        prerelease: false
+
+    - name: Attach tarball to github release
+      uses: svenstaro/upload-release-action@v2
+      with:
+        repo_token: ${{ inputs.github_token }}
+        file: nextcloud-release.tar.gz
+        asset_name: ${{ env.APP_NAME }}-${{ env.NEW_VERSION }}.tar.gz
+        tag: v${{ env.NEW_VERSION }}
+        overwrite: true
+
+    - name: Upload app to Nextcloud appstore
+      uses: nextcloud-releases/nextcloud-appstore-push-action@v1
+      with:
+        app_name: ${{ env.APP_NAME }}
+        appstore_token: ${{ inputs.appstore_token }}
+        download_url: https://github.com/${{ github.repository }}/releases/download/v${{ env.NEW_VERSION }}/${{ env.APP_NAME }}-${{ env.NEW_VERSION }}.tar.gz
+        app_private_key: ${{ inputs.signing_key }}
+        nightly: false
+
+    - name: Verify version and contents
+      shell: bash
+      run: |
+        echo "App version: ${{ env.NEW_VERSION }}"
+        echo "Tarball contents:"
+        tar -tvf nextcloud-release.tar.gz
+        echo "info.xml contents:"
+        tar -xOf nextcloud-release.tar.gz ${{ env.APP_NAME }}/appinfo/info.xml
