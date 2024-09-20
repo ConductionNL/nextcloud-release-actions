@@ -60,7 +60,7 @@ github_token: ${{ secrets.GITHUB_TOKEN }}
 signing_cert: ${{ secrets.NEXTCLOUD_SIGNING_CERT }}
 signing_key: ${{ secrets.NEXTCLOUD_SIGNING_KEY }}
 appstore_token: ${{ secrets.NEXTCLOUD_APPSTORE_TOKEN }}
-
+```
 
 ## Prerequisites
 
