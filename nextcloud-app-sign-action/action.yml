@@ -1,0 +1,22 @@
+name: 'Nextcloud App Sign'
+description: 'Signs the Nextcloud app package'
+inputs:
+  signing_cert:
+    description: 'Signing certificate'
+    required: true
+  signing_key:
+    description: 'Signing key'
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare Signing Certificate and Key
+      shell: bash
+      run: |
+        echo "${{ inputs.signing_cert }}" > signing-cert.crt
+        echo "${{ inputs.signing_key }}" > signing-key.key
+
+    - name: Sign the TAR.GZ file
+      shell: bash
+      run: |
+        openssl dgst -sha512 -sign signing-key.key nextcloud-release.tar.gz | openssl base64 -out nextcloud-release.signature
