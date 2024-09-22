@@ -1,4 +1,4 @@
-name: 'Nextcloud App Release Action'
+name: 'nextcloud-release-actions'
 description: 'Automates the release process for Nextcloud apps'
 inputs:
   github_token:
